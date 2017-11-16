@@ -9,12 +9,15 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WORKER_COUNT 2
+#define  WORKER_COUNT 4
+#define  LINES IMHT
+#define  CLUSTERS IMWD/8
+#define  LINES_PER_WORKER LINES/WORKER_COUNT
 
 typedef unsigned char uchar;      //using uchar as shorthand
 
-port p_scl = XS1_PORT_1E;         //interface ports to orientation
-port p_sda = XS1_PORT_1F;
+on tile[0]:port p_scl = XS1_PORT_1E;         //interface ports to accelerometer
+on tile[0]:port p_sda = XS1_PORT_1F;
 
 #define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
 #define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
@@ -26,6 +29,10 @@ port p_sda = XS1_PORT_1F;
 #define FXOS8700EQ_OUT_Y_LSB 0x4
 #define FXOS8700EQ_OUT_Z_MSB 0x5
 #define FXOS8700EQ_OUT_Z_LSB 0x6
+
+
+char infname[] = "test.pgm";     //put your input image path here
+char outfname[] = "testout.pgm"; //put your output image path here
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -68,65 +75,71 @@ void DataInStream(char infname[], chanend c_out)
 // Currently the function just inverts the image
 //
 /////////////////////////////////////////////////////////////////////////////////////////
-void distributor(chanend c_in, chanend c_out, chanend toWorker[worker] , int worker, chanend fromAcc)
+void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , uint workerCount, chanend fromAcc)
 {
     uchar val;
-    const int lines = IMHT;
-    const int clusters = IMWD / 8;
-    uchar board[IMHT][IMWD/8];
-    uchar nextGenBoard[IMHT][IMWD/8];
+    uchar board[LINES][CLUSTERS];
+    uchar nextGenBoard[LINES][CLUSTERS];
 
     //Starting up and wait for tilting of the xCore-200 Explorer
     printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
     printf( "Waiting for Board Tilt...\n" );
-    fromAcc :> int value;
-
+    //fromAcc :> int value;
 
     printf( "Processing...\n" );
     //Storing image data
-    for(int curLine = 0; curLine < lines; curLine++){
-        for(int curCluster = 0; curCluster < clusters; curCluster++){
-            uchar cluster = 0;                  //cluster contains 8 cells
+    for(int line = 0; line < LINES; line++){
+        for(int cluster = 0; cluster < CLUSTERS; cluster++){
+            uchar curCluster = 0;               //cluster contains 8 cells
             for(int bit = 0; bit < 8; bit++){   //go through each bit
                 c_in :> val;
-                cluster |= ((val==255) << 7-bit);
+                curCluster |= ((val==255) << 7-bit);
             }
-            board[curLine][curCluster] = cluster;
+            board[line][cluster] = curCluster;
         }
     }
 
-    //give out the data to workers
-    int curWorker = 1;
-    int linesPerWorker = (lines / WORKER_COUNT) + 2;
-    for(int line = 0; line < lines; line++){
-        for(int cluster = 0; cluster < clusters; cluster++)
-            toWorker[curWorker] <: board[line][cluster];
-        if(((line + 1) % linesPerWorker) == 0){
-            line--;
-            curWorker++;
-        }
-    }
+    printf("\nSending data to workers...\n");
+    //Sending data to workers
+    for(int worker=0; worker < WORKER_COUNT; worker++)
+        for(int line=0; line < LINES_PER_WORKER+2; line++)
+            for(int cluster=0; cluster<CLUSTERS; cluster++){
+                int startingLine = (worker*LINES_PER_WORKER) - 1 + LINES;
+                int currentLine = (startingLine + line) % LINES;
+                toWorker[worker] <: board[currentLine][cluster];
+            }
 
-    //edge case worker
-    int linesPerSide = linesPerWorker/2;
-    for(int line = IMHT - linesPerSide; 1;line++){
-        if(line == linesPerWorker/2 - 1)
-            break;
-        if(line == IMHT)
-            line -= IMHT;
-        for(int cluster = 0; cluster < clusters; cluster++)
-            toWorker[0] <: board[line][cluster];
-    }
+    printf("Data send successfully!\n");
 
+    printf("Receiving data from workers!\n");
+    //Receiving data from workers
     select{
-        case toWorker[int id] :> uchar cluster:
-            int startingLine = ((((id-1) + WORKER_COUNT) % WORKER_COUNT) * (linesPerWorker-2)) + ((linesPerWorker - 2)/2);
-            for(int currentLine = startingLine; currentLine < startingLine + (linesPerWorker - 2); currentLine++){
-                for(int currentCluster = 0; currentCluster < clusters; currentCluster++){
+        case toWorker[int worker] :> uchar receivedCluster:
+            for(int line=0; line < LINES_PER_WORKER; line++){
+                for(int cluster=0; cluster<CLUSTERS; cluster++){
+                    int startingLine = ((worker*LINES_PER_WORKER) - 1 + LINES) % LINES;
+                    int currentLine = startingLine + line;
 
+                    nextGenBoard[currentLine][cluster] = receivedCluster;
+                }
+                printf("Successfully received line:%d from worker:%d.\n", line, worker);
+            }
+            printf("Successfully received data from worker:%d\n", worker);
+            break;
+    }
+
+
+    printf("Starting to output data...\n");
+    //Outputting data
+    for(int line = 0; line < LINES; line++){
+            for(int cluster = 0; cluster < CLUSTERS; cluster++){
+                uchar curCluster = nextGenBoard[line][cluster];
+                for(int bit = 0; bit < 8; bit++){   //go through each bit
+                    val = ((curCluster << (7-bit)) & 1)*255;
+                    c_out <: val;
                 }
             }
-    }
+        }
 
 }
 
@@ -138,60 +151,83 @@ uchar evolution(uchar currentPixel, int aliveNeigh){
     return currentPixel;
 }
 
-uchar nextGen(int pixel, int cluster, int line, uchar board[(IMHT / WORKER_COUNT) + 2][IMWD / 8]){
-    const int clusters = IMWD / 8;
-    uchar currentCluster = board[line][cluster];
-    int neighbours = 0;
+    uchar nextGen(int pixel, int cluster, int line, uchar board[(IMHT / WORKER_COUNT) + 2][IMWD / 8]){
+        const int clusters = IMWD / 8;
+        uchar currentCluster = board[line][cluster];
+        int neighbours = 0;
 
 
-    for(int currentLine = (line - 1); currentLine <= line + 1; currentLine++){
-        for(int currentCol = (pixel - 1); currentCol <= pixel + 1; currentCol++){
-            uchar extraCluster = currentCluster;
+        for(int currentLine = (line - 1); currentLine <= line + 1; currentLine++){
+            for(int currentCol = (pixel - 1); currentCol <= pixel + 1; currentCol++){
+                uchar extraCluster = currentCluster;
 
-            if(!(currentCol == pixel && currentLine == line)){
-
-            if(currentCol == 0){
-                extraCluster = board[currentLine][(cluster-1 + (IMWD/8))%clusters]; //remember to change mod
-            }
-            if(currentCol == 7){
-                extraCluster = board[currentLine][(cluster+1)%clusters];
-            }
-            if(((extraCluster >> (7-currentCol)) & 1) == 1) neighbours++;
-            }
-         }
+                if(!(currentCol == pixel && currentLine == line)){
+                    if(currentCol == -1){
+                        extraCluster = board[currentLine][(cluster-1 + (IMWD/8))%clusters]; //remember to change mod
+                    }
+                    if(currentCol == 8){
+                        extraCluster = board[currentLine][(cluster+1)%clusters];
+                    }
+                    if(((extraCluster >> (7-currentCol)) & 1) == 1) neighbours++;
+                }
+             }
+        }
+        uchar currentPixel = (currentCluster << (7 - pixel)) & 1;
+        return evolution(currentPixel ,neighbours);
     }
-    uchar currentPixel = (currentCluster << (7 - pixel)) & 1;
-    return evolution(currentPixel ,neighbours);
-}
 
-void worker(chanend fromDist){
-    const int lines = (IMHT / WORKER_COUNT) +2;
-    const int clusters = IMWD / 8;
-
-    uchar board[(IMHT / WORKER_COUNT) + 2][IMWD / 8];
-    uchar nextGenBoard [(IMHT / WORKER_COUNT) + 2][IMWD / 8];
+void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
+    uchar board[LINES_PER_WORKER+2][CLUSTERS];
+    uchar nextGenBoard [LINES_PER_WORKER+2][CLUSTERS];
 
     //receiving data
-    for(int line = 0; line < lines; line++){
-        for(int cluster = 0; cluster < clusters; cluster++)
+    for(int line = 0; line < LINES_PER_WORKER+2; line++){
+        for(int cluster = 0; cluster < CLUSTERS; cluster++)
             fromDist :> board[line][cluster];
     }
+    //printf("Worker:%d successully received data!\n", id);
 
-    //updating data
-    for(int line = 1; line < lines-1; line++){
-        for(int cluster = 0; cluster < clusters; cluster++){
-            for(int pixel = 0; pixel < 8; pixel++){
-               uchar result = nextGen(pixel, cluster, line, board);
-               nextGenBoard[line][cluster] |= (result << (7 - pixel));
+
+
+    //updating data for set iterations
+    int iterations = 3;
+    while(iterations > 0){
+
+        //printf("Worker:%d updating generation.\n", id);
+        for(int line = 1; line < LINES_PER_WORKER+1; line++){
+            for(int cluster = 0; cluster < CLUSTERS; cluster++){
+                for(int pixel = 0; pixel < 8; pixel++){
+                   uchar result = nextGen(pixel, cluster, line, board);
+                   nextGenBoard[line][cluster] |= (result << (7 - pixel));
+                }
             }
         }
+
+        //printf("Worker:%d generation succesfully updated!\n", id);
+        for(int cluster = 0; cluster<CLUSTERS; cluster++){
+            par{
+                leftWorker :> board[0][cluster];
+                rightWorker <: board[LINES_PER_WORKER+1][cluster];
+            }
+        }
+
+        for(int line = 0; line < LINES_PER_WORKER+2; line++){
+            for(int cluster = 0; cluster < CLUSTERS; cluster++)
+                board[line][cluster] = nextGenBoard[line][cluster];
+        }
+
+        //printf("Worker:%d sending data to distributer.\n", id);
+        iterations--;
     }
 
+    //printf("Worker:%d sending data to distributer.\n", id);
     //sending data
-    for(int line = 1; line < lines-1; line++){
-        for(int cluster = 0; cluster < clusters; cluster++)
+    for(int line = 1; line < LINES_PER_WORKER+1; line++){
+        for(int cluster = 0; cluster < CLUSTERS; cluster++){
             fromDist <: nextGenBoard[line][cluster];
+        }
     }
+    //printf("Worker:%d data successfully sent to distrubuter!\n", id);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -213,12 +249,21 @@ void DataOutStream(char outfname[], chanend c_in)
   }
 
   //Compile each line of the image and write the image line-by-line
+//  for( int y = 0; y < IMHT; y++ ) {
+//    for( int x = 0; x < IMWD; x++ ) {
+//      c_in :> line[ x ];
+//    }
+//    _writeoutline( line, IMWD );
+//    printf( "DataOutStream: Line written...\n" );
+//  }
+
   for( int y = 0; y < IMHT; y++ ) {
+    _readinline( line, IMWD );
     for( int x = 0; x < IMWD; x++ ) {
       c_in :> line[ x ];
+      printf( "-%4.1d ", line[ x ] ); //show image values
     }
-    _writeoutline( line, IMWD );
-    printf( "DataOutStream: Line written...\n" );
+    printf( "\n" );
   }
 
   //Close the PGM image
@@ -264,7 +309,7 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
     if (!tilted) {
       if (x>30) {
         tilted = 1 - tilted;
-        toDist <: 1;
+        //toDist <: 1;
       }
     }
   }
@@ -279,17 +324,21 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "test.pgm";     //put your input image path here
-char outfname[] = "testout.pgm"; //put your output image path here
 chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
-chan workers[4];
+chan workersOut[4];
+chan workersIn[4];
 
 par {
-    i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
-    orientation(i2c[0],c_control);        //client thread reading orientation data
-    DataInStream(infname, c_inIO);          //thread to read in a PGM image
-    DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    distributor(c_inIO, c_outIO, workers, 4, c_control);//thread to coordinate work on image
+    on tile[0]:i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
+    on tile[0]:orientation(i2c[0],c_control);        //client thread reading orientation data
+    on tile[0]:DataInStream(infname, c_inIO);          //thread to read in a PGM image
+    on tile[0]:DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
+    on tile[0]:distributor(c_inIO, c_outIO, workersOut, 4, c_control);//thread to coordinate work on image
+
+    on tile[1]:worker(0, workersOut[0], workersIn[3], workersIn[1]);
+    on tile[1]:worker(1, workersOut[1], workersIn[0], workersIn[2]);
+    on tile[1]:worker(2, workersOut[2], workersIn[1], workersIn[3]);
+    on tile[1]:worker(3, workersOut[3], workersIn[2], workersIn[0]);
 
   }
 

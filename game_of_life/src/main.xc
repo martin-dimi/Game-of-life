@@ -101,17 +101,17 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
 
     printf("\nSending data to workers...\n");
     //Sending data to workers
-    for(int worker=0; worker < WORKER_COUNT; worker++){
-        printf("Starting to sent data to worker %d\n", worker);
+    for(int worker=0; worker < 4; worker++){
+       // printf("Starting to sent data to worker %d\n", worker);
         for(int line=0; line < LINES_PER_WORKER+2; line++){
             int startingLine = ((worker*LINES_PER_WORKER)- 1 + LINES) % LINES;
             int currentLine = (startingLine + line) % LINES;
-            printf("Line:%d - ", currentLine);
+            //printf("Line:%d - ", currentLine);
             for(int cluster=0; cluster<CLUSTERS; cluster++){
                 toWorker[worker] <: board[currentLine][cluster];
-                printf("%02X ", board[currentLine][cluster]);
+               // printf("%02X ", board[currentLine][cluster]);
             }
-            printf("\n");
+           //printf("\n");
         }
     }
     printf("Data send successfully!\n");
@@ -135,7 +135,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
 //                break;
 //        }
 //    }
-
+//
     for(int worker = 0; worker < 4; worker++){
         toWorker[worker] <: 1;
         printf("Starting to receive data from worker %d\n", worker);
@@ -161,7 +161,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
             for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 uchar curCluster = nextGenBoard[line][cluster];
                 for(int bit = 0; bit < 8; bit++){   //go through each bit
-                    val = ((curCluster << (7-bit)) & 1)*255;
+                    val = ((curCluster >> (7-bit)) & 1)*255;
                     c_out <: val;
                 }
             }
@@ -177,22 +177,25 @@ uchar evolution(uchar currentPixel, int aliveNeigh){
     return currentPixel;
 }
 
-uchar nextGen(int pixel, int cluster, int line, uchar board[(IMHT / WORKER_COUNT) + 2][IMWD / 8]){
-    const int clusters = IMWD / 8;
+uchar nextGen(int pixel, int cluster, int line, uchar board[LINES_PER_WORKER + 2][CLUSTERS]){
+    //printf("NEXTGEN\n");
     uchar currentCluster = board[line][cluster];
     int neighbours = 0;
 
+    //printf("NextGen: pixel:%d, cluster:%d, line:%d\n", pixel, cluster, line);
 
+    //printf("check 1\n");
     for(int currentLine = (line - 1); currentLine <= line + 1; currentLine++){
         for(int currentCol = (pixel - 1); currentCol <= pixel + 1; currentCol++){
             uchar extraCluster = currentCluster;
+            //printf("curLine:%d, curCol:%d\n", currentLine, currentCol);
 
             if(!(currentCol == pixel && currentLine == line)){
                 if(currentCol == -1){
-                    extraCluster = board[currentLine][(cluster-1 + (IMWD/8))%clusters]; //remember to change mod
+                    extraCluster = board[currentLine][(cluster-1 + CLUSTERS) % CLUSTERS];
                 }
                 if(currentCol == 8){
-                    extraCluster = board[currentLine][(cluster+1)%clusters];
+                    extraCluster = board[currentLine][(cluster+1) % CLUSTERS];
                 }
                 if(((extraCluster >> (7-currentCol)) & 1) == 1) neighbours++;
             }
@@ -207,6 +210,12 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
     uchar board[LINES_PER_WORKER+2][CLUSTERS];
     uchar nextGenBoard [LINES_PER_WORKER+2][CLUSTERS];
 
+    for(int i=0; i<LINES_PER_WORKER+2; i++){
+        for(int j=0; j<CLUSTERS; j++){
+            nextGenBoard[i][j] = 0;
+        }
+    }
+
     //receiving data from the distributer
     for(int line = 0; line < LINES_PER_WORKER+2; line++){
         for(int cluster = 0; cluster < CLUSTERS; cluster++)
@@ -214,16 +223,22 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
     }
 
     //updating data for set iterations
-    int iterations = 3;
+    int iterations = 1;
     while(iterations > 0){
 
         //updating the board
         for(int line = 1; line < LINES_PER_WORKER+1; line++){
             for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 for(int pixel = 0; pixel < 8; pixel++){
+                   //printf("Updating line:%d, cluster%d, pixel:%d\n", (id*LINES_PER_WORKER + line), cluster, pixel);
                    uchar result = nextGen(pixel, cluster, line, board);
-                   nextGenBoard[line][cluster] |= (result << (7 - pixel));
+                   //printf("Result:%01X\n", result);
+                   //printf("Pixel needed:%d\n", ((result << (7 - pixel))&1));
+
+
+                   nextGenBoard[line][cluster] |= ((result & 1)<<(7-pixel));
                 }
+                //printf("\n\n");
             }
         }
 
@@ -242,6 +257,7 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
         for(int line = 0; line < LINES_PER_WORKER+2; line++){
             for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 board[line][cluster] = nextGenBoard[line][cluster];
+                //printf("NEXTGENBOARD:%02X\n", nextGenBoard[line][cluster]);
             }
         }
 
@@ -253,9 +269,9 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
     int startSendingDataBack = 0;
     fromDist :> startSendingDataBack;
     if(startSendingDataBack == 1){
-        printf("Worker %d sending data to dist\n", id);
+        //printf("Worker %d sending data to dist\n", id);
     //sending data back to distributer
-        for(int line = 1; line < LINES_PER_WORKER+1; line++){
+        for(int line = 1; line <= LINES_PER_WORKER; line++){
             for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 //printf("%02X ", nextGenBoard[line][cluster]);
                 fromDist <: nextGenBoard[line][cluster];

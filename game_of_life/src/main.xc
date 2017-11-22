@@ -93,7 +93,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
             uchar curCluster = 0;               //cluster contains 8 cells
             for(int bit = 0; bit < 8; bit++){   //go through each bit
                 c_in :> val;
-                curCluster |= ((val==255) << 7-bit);
+                curCluster |= ((val==255) << (7-bit));
             }
             board[line][cluster] = curCluster;
         }
@@ -101,31 +101,57 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
 
     printf("\nSending data to workers...\n");
     //Sending data to workers
-    for(int worker=0; worker < WORKER_COUNT; worker++)
-        for(int line=0; line < LINES_PER_WORKER+2; line++)
+    for(int worker=0; worker < WORKER_COUNT; worker++){
+        printf("Starting to sent data to worker %d\n", worker);
+        for(int line=0; line < LINES_PER_WORKER+2; line++){
+            int startingLine = ((worker*LINES_PER_WORKER)- 1 + LINES) % LINES;
+            int currentLine = (startingLine + line) % LINES;
+            printf("Line:%d - ", currentLine);
             for(int cluster=0; cluster<CLUSTERS; cluster++){
-                int startingLine = (worker*LINES_PER_WORKER) - 1 + LINES;
-                int currentLine = (startingLine + line) % LINES;
                 toWorker[worker] <: board[currentLine][cluster];
+                printf("%02X ", board[currentLine][cluster]);
             }
-
+            printf("\n");
+        }
+    }
     printf("Data send successfully!\n");
 
-    printf("Receiving data from workers!\n");
     //Receiving data from workers
-    select{
-        case toWorker[int worker] :> uchar receivedCluster:
-            for(int line=0; line < LINES_PER_WORKER; line++){
-                for(int cluster=0; cluster<CLUSTERS; cluster++){
-                    int startingLine = ((worker*LINES_PER_WORKER) - 1 + LINES) % LINES;
-                    int currentLine = startingLine + line;
+    printf("Receiving data from workers!\n");
+//    int workersDone = 0;
+//    while(workersDone != 4){
+//        select{
+//            case toWorker[int worker] :> uchar receivedCluster:
+//                for(int line=0; line < LINES_PER_WORKER; line++){
+//                    for(int cluster=0; cluster<CLUSTERS; cluster++){
+//                        int startingLine = ((worker*LINES_PER_WORKER) - 1 + LINES) % LINES;
+//                        int currentLine = (startingLine + line) % LINES;
+//                        nextGenBoard[currentLine][cluster] = receivedCluster;
+//                    }
+//                    printf("Successfully received line:%d from worker:%d.\n", line, worker);
+//                }
+//                printf("Successfully received data from worker:%d\n", worker);
+//                workersDone++;
+//                break;
+//        }
+//    }
 
-                    nextGenBoard[currentLine][cluster] = receivedCluster;
-                }
-                printf("Successfully received line:%d from worker:%d.\n", line, worker);
+    for(int worker = 0; worker < 4; worker++){
+        toWorker[worker] <: 1;
+        printf("Starting to receive data from worker %d\n", worker);
+        for(int line=0; line < LINES_PER_WORKER; line++){
+            int startingLine = ((worker*LINES_PER_WORKER) + LINES) % LINES;
+            int currentLine = (startingLine + line) % LINES;
+            printf("Line:%d - ", currentLine);
+            for(int cluster=0; cluster<CLUSTERS; cluster++){
+                uchar receivedCluster;
+                toWorker[worker] :> receivedCluster;
+                nextGenBoard[currentLine][cluster] = receivedCluster;
+                printf("%02X ", nextGenBoard[currentLine][cluster]);
             }
-            printf("Successfully received data from worker:%d\n", worker);
-            break;
+            printf("\n");
+        }
+        printf("Successfully received data from worker:%d\n", worker);
     }
 
 
@@ -151,49 +177,47 @@ uchar evolution(uchar currentPixel, int aliveNeigh){
     return currentPixel;
 }
 
-    uchar nextGen(int pixel, int cluster, int line, uchar board[(IMHT / WORKER_COUNT) + 2][IMWD / 8]){
-        const int clusters = IMWD / 8;
-        uchar currentCluster = board[line][cluster];
-        int neighbours = 0;
+uchar nextGen(int pixel, int cluster, int line, uchar board[(IMHT / WORKER_COUNT) + 2][IMWD / 8]){
+    const int clusters = IMWD / 8;
+    uchar currentCluster = board[line][cluster];
+    int neighbours = 0;
 
 
-        for(int currentLine = (line - 1); currentLine <= line + 1; currentLine++){
-            for(int currentCol = (pixel - 1); currentCol <= pixel + 1; currentCol++){
-                uchar extraCluster = currentCluster;
+    for(int currentLine = (line - 1); currentLine <= line + 1; currentLine++){
+        for(int currentCol = (pixel - 1); currentCol <= pixel + 1; currentCol++){
+            uchar extraCluster = currentCluster;
 
-                if(!(currentCol == pixel && currentLine == line)){
-                    if(currentCol == -1){
-                        extraCluster = board[currentLine][(cluster-1 + (IMWD/8))%clusters]; //remember to change mod
-                    }
-                    if(currentCol == 8){
-                        extraCluster = board[currentLine][(cluster+1)%clusters];
-                    }
-                    if(((extraCluster >> (7-currentCol)) & 1) == 1) neighbours++;
+            if(!(currentCol == pixel && currentLine == line)){
+                if(currentCol == -1){
+                    extraCluster = board[currentLine][(cluster-1 + (IMWD/8))%clusters]; //remember to change mod
                 }
-             }
-        }
-        uchar currentPixel = (currentCluster << (7 - pixel)) & 1;
-        return evolution(currentPixel ,neighbours);
+                if(currentCol == 8){
+                    extraCluster = board[currentLine][(cluster+1)%clusters];
+                }
+                if(((extraCluster >> (7-currentCol)) & 1) == 1) neighbours++;
+            }
+         }
     }
+
+    uchar currentPixel = (currentCluster >> (7 - pixel)) & 1;
+    return evolution(currentPixel ,neighbours);
+}
 
 void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
     uchar board[LINES_PER_WORKER+2][CLUSTERS];
     uchar nextGenBoard [LINES_PER_WORKER+2][CLUSTERS];
 
-    //receiving data
+    //receiving data from the distributer
     for(int line = 0; line < LINES_PER_WORKER+2; line++){
         for(int cluster = 0; cluster < CLUSTERS; cluster++)
             fromDist :> board[line][cluster];
     }
-    //printf("Worker:%d successully received data!\n", id);
-
-
 
     //updating data for set iterations
     int iterations = 3;
     while(iterations > 0){
 
-        //printf("Worker:%d updating generation.\n", id);
+        //updating the board
         for(int line = 1; line < LINES_PER_WORKER+1; line++){
             for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 for(int pixel = 0; pixel < 8; pixel++){
@@ -203,31 +227,42 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
             }
         }
 
-        //printf("Worker:%d generation succesfully updated!\n", id);
+        //communications between workers
         for(int cluster = 0; cluster<CLUSTERS; cluster++){
-            par{
-                leftWorker :> board[0][cluster];
-                rightWorker <: board[LINES_PER_WORKER+1][cluster];
+            if(id%2==0){
+                rightWorker <: nextGenBoard[LINES_PER_WORKER][cluster];
+                leftWorker :> nextGenBoard[0][cluster];
+            }else{
+                leftWorker :> nextGenBoard[0][cluster];
+                rightWorker <: nextGenBoard[LINES_PER_WORKER][cluster];
             }
         }
 
+        //updating the oldBoard to the new one
         for(int line = 0; line < LINES_PER_WORKER+2; line++){
-            for(int cluster = 0; cluster < CLUSTERS; cluster++)
+            for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 board[line][cluster] = nextGenBoard[line][cluster];
+            }
         }
 
-        //printf("Worker:%d sending data to distributer.\n", id);
         iterations--;
     }
+    printf("Worker %d has done working\n", id);
 
-    //printf("Worker:%d sending data to distributer.\n", id);
-    //sending data
-    for(int line = 1; line < LINES_PER_WORKER+1; line++){
-        for(int cluster = 0; cluster < CLUSTERS; cluster++){
-            fromDist <: nextGenBoard[line][cluster];
+
+    int startSendingDataBack = 0;
+    fromDist :> startSendingDataBack;
+    if(startSendingDataBack == 1){
+        printf("Worker %d sending data to dist\n", id);
+    //sending data back to distributer
+        for(int line = 1; line < LINES_PER_WORKER+1; line++){
+            for(int cluster = 0; cluster < CLUSTERS; cluster++){
+                //printf("%02X ", nextGenBoard[line][cluster]);
+                fromDist <: nextGenBoard[line][cluster];
+            }
+            //printf("\n");
         }
     }
-    //printf("Worker:%d data successfully sent to distrubuter!\n", id);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -335,10 +370,11 @@ par {
     on tile[0]:DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
     on tile[0]:distributor(c_inIO, c_outIO, workersOut, 4, c_control);//thread to coordinate work on image
 
-    on tile[1]:worker(0, workersOut[0], workersIn[3], workersIn[1]);
-    on tile[1]:worker(1, workersOut[1], workersIn[0], workersIn[2]);
-    on tile[1]:worker(2, workersOut[2], workersIn[1], workersIn[3]);
-    on tile[1]:worker(3, workersOut[3], workersIn[2], workersIn[0]);
+    on tile[1]:worker(0, workersOut[0], workersIn[3], workersIn[0]);
+    on tile[1]:worker(1, workersOut[1], workersIn[0], workersIn[1]);
+    on tile[1]:worker(2, workersOut[2], workersIn[1], workersIn[2]);
+    on tile[1]:worker(3, workersOut[3], workersIn[2], workersIn[3]);
+
 
   }
 

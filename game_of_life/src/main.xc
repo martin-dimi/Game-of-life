@@ -114,10 +114,10 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
            //printf("\n");
         }
     }
-    printf("Data send successfully!\n");
+    //printf("Data send successfully!\n");
 
     //Receiving data from workers
-    printf("Receiving data from workers!\n");
+    //printf("Receiving data from workers!\n");
 //    int workersDone = 0;
 //    while(workersDone != 4){
 //        select{
@@ -138,20 +138,20 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
 //
     for(int worker = 0; worker < 4; worker++){
         toWorker[worker] <: 1;
-        printf("Starting to receive data from worker %d\n", worker);
+        //printf("Starting to receive data from worker %d\n", worker);
         for(int line=0; line < LINES_PER_WORKER; line++){
             int startingLine = ((worker*LINES_PER_WORKER) + LINES) % LINES;
             int currentLine = (startingLine + line) % LINES;
-            printf("Line:%d - ", currentLine);
+            //printf("Line:%d - ", currentLine);
             for(int cluster=0; cluster<CLUSTERS; cluster++){
                 uchar receivedCluster;
                 toWorker[worker] :> receivedCluster;
                 nextGenBoard[currentLine][cluster] = receivedCluster;
-                printf("%02X ", nextGenBoard[currentLine][cluster]);
+                //printf("%02X ", nextGenBoard[currentLine][cluster]);
             }
-            printf("\n");
+           // printf("\n");
         }
-        printf("Successfully received data from worker:%d\n", worker);
+        //printf("Successfully received data from worker:%d\n", worker);
     }
 
 
@@ -178,43 +178,52 @@ uchar evolution(uchar currentPixel, int aliveNeigh){
 }
 
 uchar nextGen(int pixel, int cluster, int line, uchar board[LINES_PER_WORKER + 2][CLUSTERS]){
-    //printf("NEXTGEN\n");
     uchar currentCluster = board[line][cluster];
-    int neighbours = 0;
+    int top, bottom, left, right, tLeft, tRight, bLeft, bRight;
+    int alive = 0;
+    int clus = CLUSTERS;
 
-    //printf("NextGen: pixel:%d, cluster:%d, line:%d\n", pixel, cluster, line);
+    int leftCluster =  ((cluster - 1) + clus) % clus;
+    int rightCluster = (cluster + 1) % clus;
 
-    //printf("check 1\n");
-    for(int currentLine = (line - 1); currentLine <= line + 1; currentLine++){
-        for(int currentCol = (pixel - 1); currentCol <= pixel + 1; currentCol++){
-            uchar extraCluster = currentCluster;
-            //printf("curLine:%d, curCol:%d\n", currentLine, currentCol);
+    top = ((board[line - 1][cluster]) >> (7-pixel)) & 1;
+    bottom = ((board[line + 1][cluster]) >> (7-pixel)) & 1;
 
-            if(!(currentCol == pixel && currentLine == line)){
-                if(currentCol == -1){
-                    extraCluster = board[currentLine][(cluster-1 + CLUSTERS) % CLUSTERS];
-                }
-                if(currentCol == 8){
-                    extraCluster = board[currentLine][(cluster+1) % CLUSTERS];
-                }
-                if(((extraCluster >> (7-currentCol)) & 1) == 1) neighbours++;
-            }
-         }
+    left = ((board[line][cluster]) >> (7-pixel+1)) & 1;
+    right = ((board[line][cluster]) >> (7-pixel-1)) & 1;
+
+    if(pixel == 0){
+        left = (board[line][leftCluster]) & 1;
+        tLeft = (board[line - 1][leftCluster]) & 1;
+        bLeft = (board[line + 1][leftCluster]) & 1;
+        tRight = ((board[line - 1][cluster]) >> (7-pixel-1)) & 1;
+        bRight = ((board[line + 1][cluster]) >> (7-pixel-1)) & 1;
+
+    }else if(pixel == 7){
+        right  = ((board[line][rightCluster]) >> 7) & 1;
+        tRight = ((board[line - 1][rightCluster]) >> 7) & 1;
+        bRight = ((board[line + 1][rightCluster]) >> 7) & 1;
+        tLeft = ((board[line - 1][cluster]) >> (7-pixel+1)) & 1;
+        bLeft = ((board[line + 1][cluster]) >> (7-pixel+1)) & 1;
+    }else
+    {
+        tLeft = ((board[line - 1][cluster]) >> (7-pixel+1)) & 1;
+        bLeft = ((board[line + 1][cluster]) >> (7-pixel+1)) & 1;
+        tRight = ((board[line - 1][cluster]) >> (7-pixel-1)) & 1;
+        bRight = ((board[line + 1][cluster]) >> (7-pixel-1)) & 1;
     }
 
+    alive = tLeft + top + tRight + left + right + bLeft + bottom + bRight;
+
     uchar currentPixel = (currentCluster >> (7 - pixel)) & 1;
-    return evolution(currentPixel ,neighbours);
+    return evolution(currentPixel, alive);
 }
 
 void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
     uchar board[LINES_PER_WORKER+2][CLUSTERS];
     uchar nextGenBoard [LINES_PER_WORKER+2][CLUSTERS];
 
-    for(int i=0; i<LINES_PER_WORKER+2; i++){
-        for(int j=0; j<CLUSTERS; j++){
-            nextGenBoard[i][j] = 0;
-        }
-    }
+
 
     //receiving data from the distributer
     for(int line = 0; line < LINES_PER_WORKER+2; line++){
@@ -223,19 +232,23 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
     }
 
     //updating data for set iterations
-    int iterations = 1;
+    int iterations = 100;
     while(iterations > 0){
 
+        for(int i=0; i<LINES_PER_WORKER+2; i++){
+            for(int j=0; j<CLUSTERS; j++){
+                nextGenBoard[i][j] = 0;
+            }
+        }
+
         //updating the board
-        for(int line = 1; line < LINES_PER_WORKER+1; line++){
+        for(int line = 1; line <= LINES_PER_WORKER; line++){
             for(int cluster = 0; cluster < CLUSTERS; cluster++){
                 for(int pixel = 0; pixel < 8; pixel++){
                    //printf("Updating line:%d, cluster%d, pixel:%d\n", (id*LINES_PER_WORKER + line), cluster, pixel);
                    uchar result = nextGen(pixel, cluster, line, board);
                    //printf("Result:%01X\n", result);
                    //printf("Pixel needed:%d\n", ((result << (7 - pixel))&1));
-
-
                    nextGenBoard[line][cluster] |= ((result & 1)<<(7-pixel));
                 }
                 //printf("\n\n");
@@ -246,10 +259,14 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
         for(int cluster = 0; cluster<CLUSTERS; cluster++){
             if(id%2==0){
                 rightWorker <: nextGenBoard[LINES_PER_WORKER][cluster];
+                rightWorker :> nextGenBoard[LINES_PER_WORKER + 1][cluster];
                 leftWorker :> nextGenBoard[0][cluster];
+                leftWorker <: nextGenBoard[1][cluster];
             }else{
                 leftWorker :> nextGenBoard[0][cluster];
+                leftWorker <: nextGenBoard[1][cluster];
                 rightWorker <: nextGenBoard[LINES_PER_WORKER][cluster];
+                rightWorker :> nextGenBoard[LINES_PER_WORKER + 1][cluster];
             }
         }
 

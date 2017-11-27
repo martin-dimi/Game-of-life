@@ -1,14 +1,11 @@
-// COMS20001 - Cellular Automaton Farm - Initial Code Skeleton
-// (using the XMOS i2c accelerometer demo code)
-
 #include <platform.h>
 #include <xs1.h>
 #include <stdio.h>
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 16                 //image height
-#define  IMWD 16                  //image width
+#define  IMHT 64                    //image height
+#define  IMWD 64                   //image width
 #define  WORKER_COUNT 4
 #define  LINES IMHT
 #define  CLUSTERS IMWD/8
@@ -37,15 +34,15 @@ on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 #define FXOS8700EQ_OUT_Z_LSB 0x6
 
 
-char infname[] = "test.pgm";     //put your input image path here
-char outfname[] = "testout.pgm"; //put your output image path here
+char infname[] = "64x64.pgm";     //put your input image path here
+char outfname[] = "64test.pgm"; //put your output image path here
 
-//int showLEDs(out port p, chanend fromDataInStream, chanend fromDataOutStream){
-//    int pattern; //1st bit...separate green LED
-//                   //2nd bit...blue LED
-//                   //3rd bit...green LED
-//                   //4th bit...red LED
-//      while (1) {
+int showLEDs(out port p, chanend fromDist){
+    int pattern; //1st bit...separate green LED
+                   //2nd bit...blue LED
+                   //3rd bit...green LED
+                   //4th bit...red LED
+      while (1) {
 //        select {
 //            case fromDataOutStream :> pattern:
 //                break;
@@ -53,11 +50,11 @@ char outfname[] = "testout.pgm"; //put your output image path here
 //                break;
 //
 //        }
-//          //receive new pattern from visualiser
-//        p <: pattern;                //send pattern to LED port
-//      }
-//      return 0;
-//}
+          fromDist :> pattern;
+        p <: pattern;                //send pattern to LED port
+      }
+      return 0;
+}
 
 void buttonListener(in port b, chanend toDist){
     int r;
@@ -93,15 +90,64 @@ void DataInStream(char infname[], chanend c_out)
     _readinline( line, IMWD );
     for( int x = 0; x < IMWD; x++ ) {
       c_out <: line[ x ];
-      printf( "-%4.1d ", line[ x ] ); //show image values
+     // printf( "-%4.1d ", line[ x ] ); //show image values
     }
-    printf( "\n" );
+    //printf( "\n" );
   }
 
   //Close PGM image file
   _closeinpgm();
   printf( "DataInStream: Done...\n" );
   return;
+}
+
+
+int getCellFromCluster(uchar cluster, int position){
+    return (cluster >> (7-position)) & 1;
+}
+
+void receiveBoardFromWorkers(chanend toWorker[WORKER_COUNT], uchar board[LINES][CLUSTERS], int *alive){
+
+    for(int worker=0; worker < WORKER_COUNT; worker++)
+        toWorker[worker] <: ACTION_RETURN_DATA;
+
+    for(int worker = 0; worker < 4; worker++){
+                   toWorker[worker] <: 1;
+                   for(int line=0; line < LINES_PER_WORKER; line++){
+                       int startingLine = ((worker*LINES_PER_WORKER) + LINES) % LINES;
+                       int currentLine = (startingLine + line) % LINES;
+                       for(int cluster=0; cluster<CLUSTERS; cluster++){
+                           uchar receivedCluster;
+                           toWorker[worker] :> receivedCluster;
+                           board[currentLine][cluster] = receivedCluster;
+                           for(int pos = 0; pos < 8; pos++)
+                               if(getCellFromCluster(receivedCluster, pos) == 1)
+                                   (*alive)++;
+                       }
+                   }
+               }
+
+}
+
+void exportData(uchar board[LINES][CLUSTERS], chanend c_out){
+    printf("Starting to output data...\n");
+    uchar val;
+
+    //Outputting data
+    for(int line = 0; line < LINES; line++){
+        for(int cluster = 0; cluster < CLUSTERS; cluster++){
+            uchar curCluster = board[line][cluster];
+            for(int pos = 0; pos < 8; pos++){   //go through each bit
+                val = getCellFromCluster(curCluster, pos)*255;
+                c_out <: val;
+            }
+        }
+    }
+}
+
+void iterateWorkers(chanend toWorker[WORKER_COUNT]){
+    for(int worker=0; worker < WORKER_COUNT; worker++)
+        toWorker[worker] <: ACTION_ITERATE;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -111,15 +157,24 @@ void DataInStream(char infname[], chanend c_out)
 // Currently the function just inverts the image
 //
 /////////////////////////////////////////////////////////////////////////////////////////
-void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , uint workerCount, chanend fromAcc, chanend fromButtons)
+void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , uint workerCount, chanend fromAcc, chanend fromButtons, chanend toLEDs)
 {
-    uchar val;
     uchar board[LINES][CLUSTERS];
-    uchar nextGenBoard[LINES][CLUSTERS];
 
+    int alive       = 0;
+    int iteration   = 0;
+    int button      = 0;
+
+    timer time;
+    const unsigned int timePeriod       = 100000000;        //1 second
+    const unsigned int timeReset        = 20 * 100000000;   //time interval for timer reset
+    unsigned int timeStart;
+    unsigned int timeFinish;
+    unsigned int timeTaken;
+
+
+    //Waiting for button 14 to be pressed to start the game
     printf("Waiting for button press..\n");
-    int button = 0;
-
     while(button != 14){
         fromButtons :> button;
     }
@@ -128,9 +183,11 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
     //Starting up and wait for tilting of the xCore-200 Explorer
     printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
     printf( "Waiting for Board Tilt...\n" );
+    toLEDs <: 4;
 
-    printf( "Processing...\n" );
     //Storing image data
+    printf( "Processing...\n" );
+    uchar val;
     for(int line = 0; line < LINES; line++){
         for(int cluster = 0; cluster < CLUSTERS; cluster++){
             uchar curCluster = 0;               //cluster contains 8 cells
@@ -142,8 +199,11 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
         }
     }
 
-    printf("\nSending data to workers...\n");
+    toLEDs <: 0;
+    time :> timeStart;
+
     //Sending data to workers
+    printf("\nSending data to workers...\n");
     for(int worker=0; worker < 4; worker++){
         for(int line=0; line < LINES_PER_WORKER+2; line++){
             int startingLine = ((worker*LINES_PER_WORKER)- 1 + LINES) % LINES;
@@ -154,51 +214,60 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
         }
     }
 
+    //Game runs forever
     while(1){
+        toLEDs <: 1;
         select {
-            case fromButtons :> button:
-                if(button == 13){
-                    //print out info
-                    for(int worker=0; worker < WORKER_COUNT; worker++){
-                           toWorker[worker] <: ACTION_RETURN_DATA;
 
-                           for(int worker = 0; worker < 4; worker++){
-                               toWorker[worker] <: 1;
-                               //printf("Starting to receive data from worker %d\n", worker);
-                               for(int line=0; line < LINES_PER_WORKER; line++){
-                                   int startingLine = ((worker*LINES_PER_WORKER) + LINES) % LINES;
-                                   int currentLine = (startingLine + line) % LINES;
-                                   //printf("Line:%d - ", currentLine);
-                                   for(int cluster=0; cluster<CLUSTERS; cluster++){
-                                       uchar receivedCluster;
-                                       toWorker[worker] :> receivedCluster;
-                                       nextGenBoard[currentLine][cluster] = receivedCluster;
-                                       //printf("%02X ", nextGenBoard[currentLine][cluster]);
-                                   }
-                                  // printf("\n");
-                               }
-                               //printf("Successfully received data from worker:%d\n", worker);
-                           }
+            //Pausing the game if the board is tilted
+            case fromAcc :> int tilted:
+                if(tilted){
+                    toLEDs <: 2;
+                    time :> timeFinish;
+                    timeTaken += (timeFinish - timeStart)/timePeriod;
 
-                           printf("Starting to output data...\n");
-                           //Outputting data
-                           for(int line = 0; line < LINES; line++){
-                               for(int cluster = 0; cluster < CLUSTERS; cluster++){
-                                   uchar curCluster = nextGenBoard[line][cluster];
-                                   for(int bit = 0; bit < 8; bit++){   //go through each bit
-                                       val = ((curCluster >> (7-bit)) & 1)*255;
-                                       c_out <: val;
-                                   }
-                               }
-                           }
-                       }
+                    alive = 0;
+                    receiveBoardFromWorkers(toWorker, board, &alive);
+
+                    printf("\nGame is paused\nIteration:%d\nAlive cells:%d\nTime taken:%u\n", iteration, alive, timeTaken); //Kwame I left it like this because otherwise it may get cut-off by another print by another tile...
+
+                    while(tilted){
+                        fromAcc :> tilted;
+                    }
+                    time :> timeStart;
                 }
                 break;
-            default:
-                for(int worker=0; worker < WORKER_COUNT; worker++){
-                    toWorker[worker] <: ACTION_ITERATE;
+
+
+            //Exporting and printing out the board if the button is pressed
+            case fromButtons :> button:
+                if(button == 13){
+                    toLEDs <: 2;
+                    time :> timeFinish;
+                    timeTaken += (timeFinish - timeStart)/timePeriod;
+
+                    //receive the board from workers
+                    alive = 0;
+                    receiveBoardFromWorkers(toWorker, board, &alive);
+                    exportData(board, c_out);
+
+                    printf("\nBoard has been exported\nIteration:%d\nAlive cells:%d\nTime taken:%u\n", iteration, alive, timeTaken);
+                    time :> timeStart;
                 }
-                printf("Iteration\n");
+                break;
+
+            //Handles the timer by reseting it correctly and not allowing it to overflow
+            case time when timerafter(timeStart + timeReset) :> void:
+                   time :> timeStart;
+                   timeTaken += timeReset/timePeriod;
+                   continue;
+
+
+            //The default action will continue iterating
+            default:
+                iterateWorkers(toWorker);
+                iteration++;
+                toLEDs <: 0;
                 break;
         }
     }
@@ -226,6 +295,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
 
 
 }
+
 
 uchar evolution(uchar currentPixel, int aliveNeigh){
 
@@ -273,7 +343,7 @@ uchar nextGen(int pixel, int cluster, int line, uchar board[LINES_PER_WORKER + 2
 
     alive = tLeft + top + tRight + left + right + bLeft + bottom + bRight;
 
-    uchar currentPixel = (currentCluster >> (7 - pixel)) & 1;
+    uchar currentPixel = getCellFromCluster(currentCluster, pixel);
     return evolution(currentPixel, alive);
 }
 
@@ -327,12 +397,14 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
         }
         else if(action == ACTION_RETURN_DATA){
             int startSendingDataBack = 0;
-            fromDist :> startSendingDataBack ;
+            fromDist :> startSendingDataBack;
             if(startSendingDataBack == 1){
                 //sending data back to distributer
-                for(int line = 1; line <= LINES_PER_WORKER; line++)
-                    for(int cluster = 0; cluster < CLUSTERS; cluster++)
+                for(int line = 1; line <= LINES_PER_WORKER; line++){
+                    for(int cluster = 0; cluster < CLUSTERS; cluster++){
                         fromDist <: nextGenBoard[line][cluster];
+                    }
+                }
             }
         }
     }
@@ -358,14 +430,15 @@ void DataOutStream(char outfname[], chanend c_in)
         }
 
         //Compile each line of the image and write the image line-by-line
-      //  for( int y = 0; y < IMHT; y++ ) {
-      //    for( int x = 0; x < IMWD; x++ ) {
-      //      c_in :> line[ x ];
-      //    }
-      //    _writeoutline( line, IMWD );
-      //    printf( "DataOutStream: Line written...\n" );
-      //  }
+//        for( int y = 0; y < IMHT; y++ ) {
+//          for( int x = 0; x < IMWD; x++ ) {
+//            c_in :> line[ x ];
+//          }
+//          _writeoutline( line, IMWD );
+//          printf( "DataOutStream: Line written...\n" );
+//        }
 
+        //Prints out the board
         for( int y = 0; y < IMHT; y++ ) {
           _readinline( line, IMWD );
           for( int x = 0; x < IMWD; x++ ) {
@@ -391,7 +464,7 @@ void DataOutStream(char outfname[], chanend c_in)
 void orientation( client interface i2c_master_if i2c, chanend toDist) {
   i2c_regop_res_t result;
   char status_data = 0;
-  int tilted = 0;
+  int wasTilted = 0;
 
   // Configure FXOS8700EQ
   result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_XYZ_DATA_CFG_REG, 0x01);
@@ -416,13 +489,17 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
     //get new x-axis tilt value
     int x = read_acceleration(i2c, FXOS8700EQ_OUT_X_MSB);
 
-    //send signal to distributor after first tilt
-    if (!tilted) {
-      if (x>30) {
-        tilted = 1 - tilted;
-        //toDist <: 1;
-      }
+    if (x>30) {
+        wasTilted = 1;
+        toDist <: 1;
+    }else if(wasTilted && x<=30){
+        wasTilted = 0;
+        toDist <: 0;
     }
+
+//    else{
+//        toDist <: 0;
+//    }
   }
 }
 
@@ -438,16 +515,16 @@ i2c_master_if i2c[1];               //interface to orientation
 chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
 chan workersOut[4];
 chan workersIn[4];
-chan cButtons;
+chan cButtons, cLEDs;
 
 par {
     on tile[0]:i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
     on tile[0]:orientation(i2c[0],c_control);        //client thread reading orientation data
     on tile[0]:DataInStream(infname, c_inIO);          //thread to read in a PGM image
     on tile[0]:DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    on tile[0]:distributor(c_inIO, c_outIO, workersOut, 4, c_control, cButtons);//thread to coordinate work on image
+    on tile[0]:distributor(c_inIO, c_outIO, workersOut, 4, c_control, cButtons, cLEDs);//thread to coordinate work on image
     on tile[0]:buttonListener(buttons, cButtons);
-    //on tile[0]:showLEDs(cLeds, cLeds);
+    on tile[0]:showLEDs(leds, cLEDs);
 
     on tile[1]:worker(0, workersOut[0], workersIn[3], workersIn[0]);
     on tile[1]:worker(1, workersOut[1], workersIn[0], workersIn[1]);

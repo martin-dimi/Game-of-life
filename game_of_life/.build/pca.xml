@@ -441,7 +441,7 @@
     </values>
   </arg>
 </fInfo>
-<fInfo name="distributor" global="true" specialize="true" noreturn="true" doNotSpecialize="false" numParams="7">
+<fInfo name="distributor" global="true" specialize="false" noreturn="true" doNotSpecialize="false" numParams="6">
   <arg num="0" specialize="false">
     <values>
       <value type="unknown"/>
@@ -457,9 +457,9 @@
       <value type="unknown"/>
     </values>
   </arg>
-  <arg num="3" specialize="true">
+  <arg num="3" specialize="false">
     <values>
-      <value type="intval"><intval isSigned="true" val="4"/></value>
+      <value type="unknown"/>
     </values>
   </arg>
   <arg num="4" specialize="false">
@@ -472,22 +472,6 @@
       <value type="unknown"/>
     </values>
   </arg>
-  <arg num="6" specialize="false">
-    <values>
-      <value type="unknown"/>
-    </values>
-  </arg>
- <specializations>
-   <specialization id="0">
-    <arg num="0"><values><value type="unknown"/></values></arg>
-    <arg num="1"><values><value type="unknown"/></values></arg>
-    <arg num="2"><values><value type="unknown"/></values></arg>
-    <arg num="3"><values><value type="intval"><intval isSigned="true" val="4"/></value></values></arg>
-    <arg num="4"><values><value type="unknown"/></values></arg>
-    <arg num="5"><values><value type="unknown"/></values></arg>
-    <arg num="6"><values><value type="unknown"/></values></arg>
-   </specialization>
- </specializations>
 </fInfo>
 <fInfo name="evolution" global="true" specialize="false" noreturn="false" doNotSpecialize="false" numParams="2">
   <arg num="0" specialize="false">
@@ -951,6 +935,10 @@
       <value type="intval"><intval isSigned="true" val="1"/></value>
       <value type="intval"><intval isSigned="true" val="2"/></value>
       <value type="intval"><intval isSigned="true" val="3"/></value>
+      <value type="intval"><intval isSigned="true" val="4"/></value>
+      <value type="intval"><intval isSigned="true" val="5"/></value>
+      <value type="intval"><intval isSigned="true" val="6"/></value>
+      <value type="intval"><intval isSigned="true" val="7"/></value>
     </values>
   </arg>
   <arg num="1" specialize="false">
@@ -1105,7 +1093,5 @@
 <fCall name="i2c_master" global="true" callerUnit="../src/main.xc" numArgs="5" impId="0" specializationId="0">
 </fCall>
 <fCall name="orientation" global="true" callerUnit="../src/main.xc" numArgs="2" impId="1" specializationId="0">
-</fCall>
-<fCall name="distributor" global="true" callerUnit="../src/main.xc" numArgs="7" impId="4" specializationId="0">
 </fCall>
 </preCompilationAnalysis>

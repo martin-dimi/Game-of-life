@@ -4,12 +4,18 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 64                    //image height
-#define  IMWD 64                   //image width
-#define  WORKER_COUNT 4
+#define  IMHT 512                    //image height
+#define  IMWD 512                   //image width
+#define  WORKER_COUNT 8
 #define  LINES IMHT
 #define  CLUSTERS IMWD/8
 #define  LINES_PER_WORKER LINES/WORKER_COUNT
+//define LED colours
+#define  RESET 0
+#define  SEPARATE_GREEN 1
+#define  BLUE 2
+#define  GREEN 4
+#define  RED 8
 
 #define ACTION_ITERATE 1
 #define ACTION_RETURN_DATA 2
@@ -34,8 +40,8 @@ on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 #define FXOS8700EQ_OUT_Z_LSB 0x6
 
 
-char infname[] = "64x64.pgm";     //put your input image path here
-char outfname[] = "64test.pgm"; //put your output image path here
+char infname[] = "512x512.pgm";     //put your input image path here
+char outfname[] = "512testout.pgm"; //put your output image path here
 
 int showLEDs(out port p, chanend fromDist){
     int pattern; //1st bit...separate green LED
@@ -88,8 +94,14 @@ void DataInStream(char infname[], chanend c_out)
   //Read image line-by-line and send byte by byte to channel c_out
   for( int y = 0; y < IMHT; y++ ) {
     _readinline( line, IMWD );
-    for( int x = 0; x < IMWD; x++ ) {
-      c_out <: line[ x ];
+    for( int cluster = 0; cluster < CLUSTERS; cluster++ ) {
+        uchar curCluster = 0;
+        for(int bit=0; bit < 8; bit++){
+            int pixelPos = (cluster * 8) + bit;
+            uchar val = line[pixelPos];
+            curCluster |= ((val==255) << (7-bit));
+        }
+            c_out <: curCluster;
      // printf( "-%4.1d ", line[ x ] ); //show image values
     }
     //printf( "\n" );
@@ -111,7 +123,7 @@ void receiveBoardFromWorkers(chanend toWorker[WORKER_COUNT], uchar board[LINES][
     for(int worker=0; worker < WORKER_COUNT; worker++)
         toWorker[worker] <: ACTION_RETURN_DATA;
 
-    for(int worker = 0; worker < 4; worker++){
+    for(int worker = 0; worker < WORKER_COUNT; worker++){
                    toWorker[worker] <: 1;
                    for(int line=0; line < LINES_PER_WORKER; line++){
                        int startingLine = ((worker*LINES_PER_WORKER) + LINES) % LINES;
@@ -157,7 +169,7 @@ void iterateWorkers(chanend toWorker[WORKER_COUNT]){
 // Currently the function just inverts the image
 //
 /////////////////////////////////////////////////////////////////////////////////////////
-void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , uint workerCount, chanend fromAcc, chanend fromButtons, chanend toLEDs)
+void distributor(chanend c_in, chanend c_out, chanend toWorker[WORKER_COUNT], chanend fromAcc, chanend fromButtons, chanend toLEDs)
 {
     uchar board[LINES][CLUSTERS];
 
@@ -183,28 +195,24 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
     //Starting up and wait for tilting of the xCore-200 Explorer
     printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
     printf( "Waiting for Board Tilt...\n" );
-    toLEDs <: 4;
+    toLEDs <: GREEN;
 
     //Storing image data
     printf( "Processing...\n" );
     uchar val;
     for(int line = 0; line < LINES; line++){
         for(int cluster = 0; cluster < CLUSTERS; cluster++){
-            uchar curCluster = 0;               //cluster contains 8 cells
-            for(int bit = 0; bit < 8; bit++){   //go through each bit
-                c_in :> val;
-                curCluster |= ((val==255) << (7-bit));
-            }
-            board[line][cluster] = curCluster;
+            c_in :> val;
+            board[line][cluster] = val;
         }
     }
 
-    toLEDs <: 0;
+    toLEDs <: RESET;
     time :> timeStart;
 
     //Sending data to workers
     printf("\nSending data to workers...\n");
-    for(int worker=0; worker < 4; worker++){
+    for(int worker=0; worker < WORKER_COUNT; worker++){
         for(int line=0; line < LINES_PER_WORKER+2; line++){
             int startingLine = ((worker*LINES_PER_WORKER)- 1 + LINES) % LINES;
             int currentLine = (startingLine + line) % LINES;
@@ -216,13 +224,13 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
 
     //Game runs forever
     while(1){
-        toLEDs <: 1;
+        toLEDs <: SEPARATE_GREEN;
         select {
 
             //Pausing the game if the board is tilted
             case fromAcc :> int tilted:
                 if(tilted){
-                    toLEDs <: 2;
+                    toLEDs <: RED;
                     time :> timeFinish;
                     timeTaken += (timeFinish - timeStart)/timePeriod;
 
@@ -242,7 +250,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
             //Exporting and printing out the board if the button is pressed
             case fromButtons :> button:
                 if(button == 13){
-                    toLEDs <: 2;
+                    toLEDs <: BLUE;
                     time :> timeFinish;
                     timeTaken += (timeFinish - timeStart)/timePeriod;
 
@@ -267,7 +275,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[workerCount] , ui
             default:
                 iterateWorkers(toWorker);
                 iteration++;
-                toLEDs <: 0;
+                toLEDs <: RESET;
                 break;
         }
     }
@@ -374,7 +382,6 @@ void worker(int id, chanend fromDist, chanend leftWorker, chanend rightWorker){
                        nextGenBoard[line][cluster] |= ((result & 1)<<(7-pixel));
                     }
                 }
-
             //updating oldBoard
             for(int i=0; i<LINES_PER_WORKER+2; i++)
                 for(int j=0; j<CLUSTERS; j++)
@@ -513,8 +520,8 @@ int main(void) {
 i2c_master_if i2c[1];               //interface to orientation
 
 chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
-chan workersOut[4];
-chan workersIn[4];
+chan workersDist[8];
+chan workersTW[8];
 chan cButtons, cLEDs;
 
 par {
@@ -522,14 +529,19 @@ par {
     on tile[0]:orientation(i2c[0],c_control);        //client thread reading orientation data
     on tile[0]:DataInStream(infname, c_inIO);          //thread to read in a PGM image
     on tile[0]:DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    on tile[0]:distributor(c_inIO, c_outIO, workersOut, 4, c_control, cButtons, cLEDs);//thread to coordinate work on image
+    on tile[0]:distributor(c_inIO, c_outIO, workersDist, c_control, cButtons, cLEDs);//thread to coordinate work on image
     on tile[0]:buttonListener(buttons, cButtons);
     on tile[0]:showLEDs(leds, cLEDs);
 
-    on tile[1]:worker(0, workersOut[0], workersIn[3], workersIn[0]);
-    on tile[1]:worker(1, workersOut[1], workersIn[0], workersIn[1]);
-    on tile[1]:worker(2, workersOut[2], workersIn[1], workersIn[2]);
-    on tile[1]:worker(3, workersOut[3], workersIn[2], workersIn[3]);
+    on tile[1]:worker(0, workersDist[0], workersTW[7], workersTW[0]);
+    on tile[1]:worker(1, workersDist[1], workersTW[0], workersTW[1]);
+    on tile[1]:worker(2, workersDist[2], workersTW[1], workersTW[2]);
+    on tile[1]:worker(3, workersDist[3], workersTW[2], workersTW[3]);
+    on tile[1]:worker(4, workersDist[4], workersTW[3], workersTW[4]);
+    on tile[1]:worker(5, workersDist[5], workersTW[4], workersTW[5]);
+    on tile[1]:worker(6, workersDist[6], workersTW[5], workersTW[6]);
+    on tile[1]:worker(7, workersDist[7], workersTW[6], workersTW[7]);
+
 
 
   }

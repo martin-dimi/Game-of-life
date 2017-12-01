@@ -16,6 +16,6 @@ It includes:
 * Synchronised thread communication using channels
 
 ## Examples
-<img src="images/64x64.png" height="128" width="128"> --64x64, 100 Iterations, Time taken:6020 miliseconds--> <img src="images/64out.png" height="128" width="128">  
-<img src="images/128x128.png" height="128" width="128"> --128x128, 100 Iterations, Time taken:17935 miliseconds--> <img src="images/128out.png" height="128" width="128">  
+<img src="images/64x64.png" height="128" width="128"> **---**64x64,   100 Iterations,  Time taken:6020 miliseconds**--->** <img src="images/64out.png" height="128" width="128">  
+<img src="images/128x128.png" height="128" width="128"> **---**128x128, 100 Iterations, Time taken:17935 miliseconds**--->** <img src="images/128out.png" height="128" width="128">  
 

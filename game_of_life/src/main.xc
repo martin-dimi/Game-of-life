@@ -4,8 +4,8 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 512                    //image height
-#define  IMWD 512                   //image width
+#define  IMHT 128                    //image height
+#define  IMWD 128                   //image width
 #define  WORKER_COUNT 8
 #define  LINES IMHT
 #define  CLUSTERS IMWD/8
@@ -40,8 +40,8 @@ on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 #define FXOS8700EQ_OUT_Z_LSB 0x6
 
 
-char infname[] = "512x512.pgm";     //put your input image path here
-char outfname[] = "512testout.pgm"; //put your output image path here
+char infname[] = "128x128.pgm";     //put your input image path here
+char outfname[] = "128out.pgm"; //put your output image path here
 
 int showLEDs(out port p, chanend fromDist){
     int pattern; //1st bit...separate green LED
@@ -178,11 +178,11 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[WORKER_COUNT], ch
     int button      = 0;
 
     timer time;
-    const unsigned int timePeriod       = 100000000;        //1 second
+    const unsigned int timePeriod       = 1000;        //1 second
     const unsigned int timeReset        = 20 * 100000000;   //time interval for timer reset
     unsigned int timeStart;
     unsigned int timeFinish;
-    unsigned int timeTaken;
+    unsigned int timeTaken = 0;
 
 
     //Waiting for button 14 to be pressed to start the game
@@ -194,7 +194,6 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[WORKER_COUNT], ch
 
     //Starting up and wait for tilting of the xCore-200 Explorer
     printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
-    printf( "Waiting for Board Tilt...\n" );
     toLEDs <: GREEN;
 
     //Storing image data
@@ -223,8 +222,11 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[WORKER_COUNT], ch
     }
 
     //Game runs forever
+    int ite = 0;
+    int separateGreen = 0;
     while(1){
-        toLEDs <: SEPARATE_GREEN;
+        separateGreen = !separateGreen;
+        toLEDs <: separateGreen;
         select {
 
             //Pausing the game if the board is tilted
@@ -237,7 +239,7 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[WORKER_COUNT], ch
                     alive = 0;
                     receiveBoardFromWorkers(toWorker, board, &alive);
 
-                    printf("\nGame is paused\nIteration:%d\nAlive cells:%d\nTime taken:%u\n", iteration, alive, timeTaken); //Kwame I left it like this because otherwise it may get cut-off by another print by another tile...
+                    printf("\nGame is paused\nIteration:%d\nAlive cells:%d\nTime taken:%u\n", iteration, alive, timeTaken);
 
                     while(tilted){
                         fromAcc :> tilted;
@@ -275,33 +277,10 @@ void distributor(chanend c_in, chanend c_out, chanend toWorker[WORKER_COUNT], ch
             default:
                 iterateWorkers(toWorker);
                 iteration++;
-                toLEDs <: RESET;
+                ite++;
                 break;
         }
     }
-
-    //Receiving data from workers
-    //printf("Receiving data from workers!\n");
-//    int workersDone = 0;
-//    while(workersDone != 4){
-//        select{
-//            case toWorker[int worker] :> uchar receivedCluster:
-//                for(int line=0; line < LINES_PER_WORKER; line++){
-//                    for(int cluster=0; cluster<CLUSTERS; cluster++){
-//                        int startingLine = ((worker*LINES_PER_WORKER) - 1 + LINES) % LINES;
-//                        int currentLine = (startingLine + line) % LINES;
-//                        nextGenBoard[currentLine][cluster] = receivedCluster;
-//                    }
-//                    printf("Successfully received line:%d from worker:%d.\n", line, worker);
-//                }
-//                printf("Successfully received data from worker:%d\n", worker);
-//                workersDone++;
-//                break;
-//        }
-//    }
-//
-
-
 }
 
 
@@ -430,30 +409,33 @@ void DataOutStream(char outfname[], chanend c_in)
   while(1){
       //Open PGM file
         printf( "DataOutStream: Start...\n" );
-        res = _openoutpgm( outfname, IMWD, IMHT );
-        if( res ) {
-          printf( "DataOutStream: Error opening %s\n.", outfname );
-          return;
-        }
+
 
         //Compile each line of the image and write the image line-by-line
-//        for( int y = 0; y < IMHT; y++ ) {
-//          for( int x = 0; x < IMWD; x++ ) {
-//            c_in :> line[ x ];
-//          }
-//          _writeoutline( line, IMWD );
-//          printf( "DataOutStream: Line written...\n" );
-//        }
+        for( int y = 0; y < IMHT; y++ ) {
+          for( int x = 0; x < IMWD; x++ ) {
+            c_in :> line[ x ];
+          }
+          if(y == 0){
+              res = _openoutpgm( outfname, IMWD, IMHT );
+                      if( res ) {
+                        printf( "DataOutStream: Error opening %s\n.", outfname );
+                        return;
+                      }
+          }
+          _writeoutline( line, IMWD );
+          //printf( "DataOutStream: Line written...\n" );
+        }
 
         //Prints out the board
-        for( int y = 0; y < IMHT; y++ ) {
+        /*for( int y = 0; y < IMHT; y++ ) {
           _readinline( line, IMWD );
           for( int x = 0; x < IMWD; x++ ) {
             c_in :> line[ x ];
-            printf( "-%4.1d ", line[ x ] ); //show image values
+            //printf( "-%4.1d ", line[ x ] ); //show image values
           }
-          printf( "\n" );
-        }
+          //printf( "\n" );
+        }*/
 
         //Close the PGM image
         _closeoutpgm();
@@ -503,10 +485,6 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
         wasTilted = 0;
         toDist <: 0;
     }
-
-//    else{
-//        toDist <: 0;
-//    }
   }
 }
 
@@ -520,8 +498,8 @@ int main(void) {
 i2c_master_if i2c[1];               //interface to orientation
 
 chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
-chan workersDist[8];
-chan workersTW[8];
+chan workersDist[WORKER_COUNT];
+chan workersTW[WORKER_COUNT];
 chan cButtons, cLEDs;
 
 par {
@@ -533,7 +511,7 @@ par {
     on tile[0]:buttonListener(buttons, cButtons);
     on tile[0]:showLEDs(leds, cLEDs);
 
-    on tile[1]:worker(0, workersDist[0], workersTW[7], workersTW[0]);
+    on tile[0]:worker(0, workersDist[0], workersTW[7], workersTW[0]);
     on tile[1]:worker(1, workersDist[1], workersTW[0], workersTW[1]);
     on tile[1]:worker(2, workersDist[2], workersTW[1], workersTW[2]);
     on tile[1]:worker(3, workersDist[3], workersTW[2], workersTW[3]);

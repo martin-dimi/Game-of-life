@@ -17,4 +17,6 @@ It includes:
 
 ## Examples
 Board: 64x64, 100 Iterations, Time taken:2315 miliseconds  
-<img src="Images/64x64.png" height="256" width="256"> <img src="Images/64out.png" height="64" width="64">
+<img src="images/64x64.png" height="128" width="128"> --100 Iterations--> <img src="images/64out.png" height="128" width="128">  
+<img src="images/128x128.png" height="128" width="128"> --100 Iterations--> <img src="images/128out.png" height="128" width="128">  
+

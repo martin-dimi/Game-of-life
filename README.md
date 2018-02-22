@@ -30,3 +30,9 @@ Limitations:
 * The number of tiles: with more tiles we could have more workers processing in parallel
 * The need for data transfer between distributor and workers whenever a data export is requested
 
+## Possible improvements
+* We have multiple ideas on how to improve the program that we couldn’t try due to time restraints:
+The data can be compressed even more by grouping clusters together into a “word” and then encoding that word into an ASCII character. That way, even though we would have to save a dictionary for the different encodings, that dictionary would still take less space in processing larger images. This scheme would work very similarly to the LZW compression used in compressing files.
+* We can disable and reassign workers that are processing empty (dead) sections of the board. We can decide which workers may need reassigning using previously gathered board data.
+* We experimented with storage in the nextGen function. We could replace multiple integer values representing the cells surrounded the current cell, by a single value that simply accumulated the number of alive cells that surrounded the current cell.
+

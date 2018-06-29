@@ -1,8 +1,8 @@
 # Game-of-life
 
-## Introduction
+## About
 This is Conway's version of Game of life. Made as an assignment for Concurrent Computing.  
-The simulation is designed to work on xCORE-200 eXplorerKIT.
+The simulation is designed to work on xCORE-200 eXplorerKIT. Some of the core features are parallel programming, synchronization and bit-packing.
 
 ## Functionality
 **The simulation is written in XC.**  
